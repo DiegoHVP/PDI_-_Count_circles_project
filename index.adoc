@@ -1,0 +1,166 @@
+= Projeto de Processamento Digital de Imagem: Detecção de Círculos Coloridos em Tempo Real
+:author: Diêgo Henrique Viana Pereira
+:date: 29-01-2025
+:institution: Universidade Federal do Rio Grande do Norte (UFRN)
+
+== Introdução
+Este projeto implementa um sistema de detecção e contagem de objetos circulares coloridos em fluxos de vídeo RTSP, utilizando técnicas fundamentais de Processamento Digital de Imagem (PDI). O sistema combina:
+
+- Transformada de Hough para detecção de formas geométricas
+- Classificação de cores no espaço HSV
+- Processamento de vídeo em tempo real
+
+== Estrutura do Código
+
+=== Dependências Principais
+[source,python]
+----
+import cv2        # Manipulação de imagens e operações de visão computacional
+import numpy as np # Operações matriciais eficientes
+import time       # Controle de temporização
+----
+
+=== Configuração do Fluxo de Vídeo
+[source,python]
+----
+rtsp_url = "rtsp://100.108.91.148:8080/h264_opus.sdp"
+cap = cv2.VideoCapture(rtsp_url)
+time.sleep(2)  # Estabilização inicial da conexão
+----
+Para o uso do algoritmo, utilizarei o aplicativo [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam&hl=pt_BR&pli=1) do Android. Com ele, é possível compartilhar a câmera via RTSP.
+
+== Pré-processamento
+
+=== Pipeline de Otimização
+[source,python]
+----
+frame_redimensionado = cv2.resize(frame, (640, 480))  # Redução para 640x480
+cinza = cv2.cvtColor(frame_processado, cv2.COLOR_BGR2GRAY)  # Conversão para 1 canal
+desfoque = cv2.GaussianBlur(cinza, (9, 9), 2)  # Filtro Gaussiano 9x9
+----
+
+Para a utilização do algoritmo de detecção de círculos, precisamos converter a imagem para a escala de cinza. Isso porque a Transformada de Hough para detecção de círculos opera em imagens de um único canal (escala de cinza), o que simplifica o processamento e melhora a eficiência da detecção.
+Além disso na imagem fazemos o redimensionamento que reduz 56% dos pixels processados (de 1280x720 para 640x480) e o filtro Gaussiano remove ruídos de alta frequência (σ=2).
+
+== Detecção de Círculos
+
+=== Parâmetros da Transformada de Hough
+Detecta círculos em uma imagem utilizando a Transformada de Hough.
+
+[source,python]
+----
+circulos = cv2.HoughCircles(
+    desfoque,
+    cv2.HOUGH_GRADIENT,
+    dp=1.5,        # Acelerador de processamento
+    minDist=40,    # 2x raio máximo (evita sobreposições)
+    param1=100,    # Limiar superior do detector Canny
+    param2=30,     # Limiar de votos mínimos
+    minRadius=15,  # Diâmetro mínimo de 30 pixels
+    maxRadius=60   # Diâmetro máximo de 120 pixels
+)
+----
+
+A função HoughCircles presente no opencv retorna um array de círculos detectados, onde cada círculo é representado por um vetor (x, y, raio).
+
+[cols="1,3,2", frame="topbot", options="header"]
+|===
+| Parâmetro | Função | Valores Típicos
+| `dp` | Resolução do acumulador | 1.0-2.0
+| `minDist` | Distância entre centros | 1.5-2x diâmetro máximo
+| `param1` | Limiar superior do detector Canny | 100-200
+| `param2` | Sensibilidade da detecção | 20-50 (↑ = menos falsos positivos)
+| `minRadius` | Raio mínimo dos círculos a serem detectados | 10-20 pixels
+| `maxRadius` | Raio máximo dos círculos a serem detectados | 50-100 pixels
+|===
+
+=== Algoritmo de Classificação por cores
+Esta função classifica uma cor BGR fornecida em uma das três categorias: 'vermelho', 'verde' ou 'azul'.
+Ela recebe um único argumento:
+- media_bgr: Uma lista ou tupla representando a cor BGR a ser classificada.
+
+A função converte a cor BGR para o espaço de cores HSV usando a função cvtColor do OpenCV.
+Em seguida, verifica os componentes hue (h), saturation (s) e value (v) da cor HSV para determinar a categoria da cor:
+- Se o hue estiver entre 0-10 ou 170-180, e tanto a saturação quanto o valor forem maiores que 80, retorna 'vermelho'.
+- Se o hue estiver entre 40-80, e tanto a saturação quanto o valor forem maiores que 80, retorna 'verde'.
+- Se o hue estiver entre 90-130, e tanto a saturação quanto o valor forem maiores que 80, retorna 'azul'.
+- Se nenhuma das condições for atendida, retorna None.
+
+[source,python]
+----
+def classificar_cor(media_bgr):
+    hsv = cv2.cvtColor([[media_bgr]], cv2.COLOR_BGR2HSV)[0][0]
+    h, s, v = hsv
+    if (h <=10 or h >=170) and s>80 and v>80:
+        return 'vermelho'
+    elif 40 <= h <=80 and s>80 and v>80:
+        return 'verde'
+    elif 90 <= h <=130 and s>80 and v>80:
+        return 'azul'
+    return None
+----
+
+[cols="1,2", frame="topbot"]
+|===
+| Faixa Hue | Cor Detectada
+| 0-10 ou 170-180 | Vermelho
+| 40-80 | Verde
+| 90-130 | Azul
+|===
+
+== Processamento em Tempo Real
+
+=== Detecção de Círculos
+[source,python]
+----
+# Se círculos foram detectados
+if circulos is not None:
+    # Converte as coordenadas e o raio para inteiros
+    circulos = np.uint16(np.around(circulos))
+    circulos_filtrados = []
+
+    for circulo in circulos[0, :]:
+        x, y, r = circulo
+        sobreposto = False
+
+        # Verifica se o círculo atual sobrepõe algum dos círculos já filtrados
+        for fc in circulos_filtrados:
+            fx, fy, fr = fc
+            distancia = np.sqrt((x - fx) ** 2 + (y - fy) ** 2)
+            if distancia < r + fr:
+                sobreposto = True
+                break
+
+        if not sobreposto:
+            circulos_filtrados.append((x, y, r))
+
+    for circulo in circulos_filtrados:
+        x, y, r = circulo
+        
+        # Criar uma máscara para isolar a área do círculo
+        mascara = np.zeros_like(cinza)
+        cv2.circle(mascara, (x, y), r, 255, -1)
+        
+        # Aplica a máscara para extrair a região do círculo
+        regiao_mascarada = cv2.bitwise_and(frame_processado, frame_processado, mask=mascara)
+        
+        # Calcula a cor média dentro do círculo
+        media_bgr = cv2.mean(regiao_mascarada, mask=mascara)[:3]
+        media_bgr = tuple(map(int, media_bgr))
+        
+        # Determina a cor do círculo
+        cor_detectada = classificar_cor(media_bgr)
+        
+        # Incrementa a contagem da cor detectada
+        if cor_detectada in contagem_cores:
+            contagem_cores[cor_detectada] += 1
+            cor_borda = (0, 0, 255) if cor_detectada == 'vermelho' else (255, 0, 0) if cor_detectada == 'azul' else (0, 255, 0)
+            cv2.circle(frame_processado, (x, y), r, cor_borda, 2)  # Desenha o círculo detectado
+----
+Nessa parte do codigo, verificamos se o HoughCircles retornou algum circulo, se há círculos detectados a variavel tera as coordenadas e o raio dos círculos que são convertidos para inteiros. Em seguida, filtra os círculos para remover sobreposições, garantindo que apenas círculos não sobrepostos sejam considerados. Para cada círculo filtrado, uma máscara é criada para isolar a área do círculo na imagem. A máscara é então aplicada para extrair a região do círculo, e a cor média dentro do círculo é calculada. Com base na cor média, o código classifica a cor do círculo e incrementa a contagem dessa cor em um dicionário (`contagem_cores`). Finalmente, o código desenha um círculo ao redor do círculo detectado na imagem processada, utilizando uma cor de borda específica para cada cor detectada (vermelho, azul ou verde).
+
+== Demonstração:
+Disponível em: https://youtu.be/B8VymSPAElU
+
+== Conclusões
+O projeto desenvolvido demonstrou eficácia na detecção precisa de formas circulares, sendo robusto na classificação de cores sob variações luminosas.

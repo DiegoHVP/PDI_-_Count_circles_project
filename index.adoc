@@ -1,4 +1,4 @@
-= Projeto de Processamento Digital de Imagem: Detecção de Círculos Coloridos em Tempo Real
+= Projeto PDI: Detecção de círculos em Tempo Real
 :author: Diêgo Henrique Viana Pereira
 :date: 29-01-2025
 :institution: Universidade Federal do Rio Grande do Norte (UFRN)
